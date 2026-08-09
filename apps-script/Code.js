@@ -1,18 +1,18 @@
-// Bibliotech — lógica de servidor (Google Apps Script, bound a la Spreadsheet)
-// Corre con el login de Google de quien accede (webapp.executeAs: USER_ACCESSING,
-// webapp.access: DOMAIN en appsscript.json): no requiere cuenta de servicio,
-// JSON de credenciales, ni secrets.toml — el gate de acceso lo hace Google.
+// Bibliotech — server-side logic (Google Apps Script, bound to the Spreadsheet)
+// Runs as whoever is accessing it (webapp.executeAs: USER_ACCESSING,
+// webapp.access: DOMAIN in appsscript.json): no service account, no
+// credentials JSON, no secrets.toml — Google itself gates access.
 
-const SHEET_LIBROS = 'Libros';
-const SHEET_PRESTAMOS = 'Prestamos';
-const SHEET_PERFILES = 'Perfiles';
+const SHEET_BOOKS = 'Libros';
+const SHEET_LOANS = 'Prestamos';
+const SHEET_PROFILES = 'Perfiles';
 
-const ROL_STAFF = 'staff';
-const ROL_MEMBER = 'member';
+const ROLE_STAFF = 'staff';
+const ROLE_MEMBER = 'member';
 
-const ESTADO_SOLICITADO = 'Solicitado';
-const ESTADO_ENTREGADO = 'Entregado';
-const ESTADO_DEVUELTO = 'Devuelto';
+const STATUS_REQUESTED = 'Solicitado';
+const STATUS_DELIVERED = 'Entregado';
+const STATUS_RETURNED = 'Devuelto';
 
 function doGet() {
   return HtmlService.createTemplateFromFile('Index')
@@ -21,124 +21,123 @@ function doGet() {
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
-/** Inyecta Stylesheet.html / JavaScript.html dentro de Index.html. */
+/** Injects Stylesheet.html / JavaScript.html into Index.html. */
 function include(filename) {
   return HtmlService.createHtmlOutputFromFile(filename).getContent();
 }
 
-/** Lee una sheet completa y devuelve encabezados + filas (sin la fila de encabezado). */
-function leerSheet_(nombre) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(nombre);
+/** Reads a full sheet and returns its headers plus rows (header row excluded). */
+function readSheet_(name) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
   const data = sheet.getDataRange().getValues();
   const headers = data.shift();
   return { sheet, headers, rows: data };
 }
 
 /**
- * Perfil (Email/Nombre/Curso/Rol) de quien está usando la app, o null si
- * todavía no completó el alta (primera visita). El email sale de la sesión
- * de Google, nunca del cliente.
+ * Profile (email/name/grade/role) of whoever is using the app, or null if
+ * they haven't signed up yet (first visit). The email comes from the
+ * Google session, never from the client.
  */
-function obtenerPerfilActual() {
+function getCurrentProfile() {
   const email = Session.getActiveUser().getEmail();
-  const { headers, rows } = leerSheet_(SHEET_PERFILES);
-  const idxEmail = headers.indexOf('Email');
-  const idxNombre = headers.indexOf('Nombre');
-  const idxCurso = headers.indexOf('Curso');
-  const idxRol = headers.indexOf('Rol');
+  const { headers, rows } = readSheet_(SHEET_PROFILES);
+  const emailIdx = headers.indexOf('Email');
+  const nameIdx = headers.indexOf('Nombre');
+  const gradeIdx = headers.indexOf('Curso');
+  const roleIdx = headers.indexOf('Rol');
 
-  const fila = rows.find(row => row[idxEmail] === email);
-  if (!fila) return null;
+  const row = rows.find(r => r[emailIdx] === email);
+  if (!row) return null;
 
   return {
     email,
-    nombre: fila[idxNombre],
-    curso: fila[idxCurso],
-    rol: fila[idxRol] || ROL_MEMBER
+    name: row[nameIdx],
+    grade: row[gradeIdx],
+    role: row[roleIdx] || ROLE_MEMBER
   };
 }
 
 /**
- * Da de alta el perfil de quien está usando la app. El rol siempre se fija
- * en 'member' del lado del servidor (nunca se toma del cliente); para
- * promover a alguien a 'staff' se edita la columna Rol directamente en la
- * pestaña Perfiles.
+ * Signs up the current user's profile. The role is always fixed to
+ * 'member' server-side (never taken from the client); promoting someone
+ * to 'staff' means editing the Rol column directly on the Perfiles sheet.
  */
-function crearPerfil(datos) {
-  const existente = obtenerPerfilActual();
-  if (existente) {
-    return { ok: true, perfil: existente };
+function createProfile(data) {
+  const existing = getCurrentProfile();
+  if (existing) {
+    return { ok: true, profile: existing };
   }
 
   const email = Session.getActiveUser().getEmail();
-  const nombre = (datos.nombre || '').trim();
-  const curso = (datos.curso || '').trim();
+  const name = (data.name || '').trim();
+  const grade = (data.grade || '').trim();
 
-  if (!nombre || !curso) {
+  if (!name || !grade) {
     return { ok: false, error: 'Completá todos los campos.' };
   }
 
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_PERFILES);
-  sheet.appendRow([email, nombre, curso, ROL_MEMBER, new Date()]);
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_PROFILES);
+  sheet.appendRow([email, name, grade, ROLE_MEMBER, new Date()]);
 
-  return { ok: true, perfil: { email, nombre, curso, rol: ROL_MEMBER } };
+  return { ok: true, profile: { email, name, grade, role: ROLE_MEMBER } };
 }
 
-/** Lanza si quien está usando la app no tiene perfil o no es staff. */
-function requerirStaff_() {
-  const perfil = obtenerPerfilActual();
-  if (!perfil || perfil.rol !== ROL_STAFF) {
+/** Throws if whoever is using the app has no profile or isn't staff. */
+function requireStaff_() {
+  const profile = getCurrentProfile();
+  if (!profile || profile.role !== ROLE_STAFF) {
     throw new Error('No autorizado.');
   }
-  return perfil;
+  return profile;
 }
 
 /**
- * Devuelve el catálogo con stock > 0.
- * Encabezados esperados en la fila 1 de "Libros":
+ * Returns the catalog of books with stock > 0.
+ * Expected headers on row 1 of "Libros":
  * Id_Libro | Titulo | Autor | Cantidad_Total | Disponibles | Prestado
  *
- * Disponibles se calcula como Cantidad_Total − Prestado (no se lee la
- * columna Disponibles directamente: queda como reflejo visual, la fuente
- * de verdad es Cantidad_Total/Prestado).
+ * Disponibles is computed as Cantidad_Total − Prestado (the Disponibles
+ * column itself is never read: it's kept as a visual mirror, the source
+ * of truth is Cantidad_Total/Prestado).
  */
-function getCatalogo() {
-  const { headers, rows } = leerSheet_(SHEET_LIBROS);
-  const idxTitulo = headers.indexOf('Titulo');
-  const idxAutor = headers.indexOf('Autor');
-  const idxCantidadTotal = headers.indexOf('Cantidad_Total');
-  const idxPrestado = headers.indexOf('Prestado');
+function getCatalog() {
+  const { headers, rows } = readSheet_(SHEET_BOOKS);
+  const titleIdx = headers.indexOf('Titulo');
+  const authorIdx = headers.indexOf('Autor');
+  const totalCopiesIdx = headers.indexOf('Cantidad_Total');
+  const borrowedIdx = headers.indexOf('Prestado');
 
   return rows
     .map(row => {
-      const cantidadTotal = Number(row[idxCantidadTotal]) || 0;
-      const prestado = Number(row[idxPrestado]) || 0;
+      const totalCopies = Number(row[totalCopiesIdx]) || 0;
+      const borrowed = Number(row[borrowedIdx]) || 0;
       return {
-        titulo: row[idxTitulo],
-        autor: row[idxAutor],
-        disponibles: cantidadTotal - prestado
+        title: row[titleIdx],
+        author: row[authorIdx],
+        available: totalCopies - borrowed
       };
     })
-    .filter(libro => libro.disponibles > 0);
+    .filter(book => book.available > 0);
 }
 
 /**
- * Registra un préstamo para quien está usando la app: valida perfil y
- * stock, incrementa "Prestado" y agrega la fila en "Prestamos" con Estado
- * "Solicitado". Usa LockService para evitar que dos envíos simultáneos
- * reserven el mismo último ejemplar (el bug que tenía la versión Streamlit).
- * El stock se descuenta acá mismo, no al confirmar la entrega — así un
- * segundo pedido del último ejemplar ya lo ve sin stock aunque el libro
- * todavía esté "Solicitado" y no haya pasado por el mostrador.
+ * Requests a loan for whoever is using the app: validates the profile and
+ * stock, bumps "Prestado" and appends the row on "Prestamos" with status
+ * "Solicitado". Uses LockService so two simultaneous submits can't both
+ * grab the same last copy (the bug the Streamlit version had).
+ * Stock is decremented right here, not when staff confirm delivery — that
+ * way a second request for the last copy already sees no stock even
+ * though the book is still "Solicitado" and hasn't been picked up yet.
  */
-function registrarPrestamo(datos) {
-  const perfil = obtenerPerfilActual();
-  if (!perfil) {
+function requestLoan(data) {
+  const profile = getCurrentProfile();
+  if (!profile) {
     return { ok: false, error: 'Completá tu perfil antes de pedir un préstamo.' };
   }
 
-  const libro = datos.libro;
-  if (!libro) {
+  const title = data.book;
+  if (!title) {
     return { ok: false, error: 'Elegí un libro.' };
   }
 
@@ -147,25 +146,25 @@ function registrarPrestamo(datos) {
 
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const libros = ss.getSheetByName(SHEET_LIBROS);
-    const data = libros.getDataRange().getValues();
-    const headers = data[0];
-    const idxIdLibro = headers.indexOf('Id_Libro');
-    const idxTitulo = headers.indexOf('Titulo');
-    const idxCantidadTotal = headers.indexOf('Cantidad_Total');
-    const idxDisponibles = headers.indexOf('Disponibles');
-    const idxPrestado = headers.indexOf('Prestado');
+    const books = ss.getSheetByName(SHEET_BOOKS);
+    const rows = books.getDataRange().getValues();
+    const headers = rows[0];
+    const bookIdIdx = headers.indexOf('Id_Libro');
+    const titleIdx = headers.indexOf('Titulo');
+    const totalCopiesIdx = headers.indexOf('Cantidad_Total');
+    const availableIdx = headers.indexOf('Disponibles');
+    const borrowedIdx = headers.indexOf('Prestado');
 
     let rowIndex = -1;
-    let idLibro = null;
-    let cantidadTotal = 0;
-    let prestado = 0;
-    for (let i = 1; i < data.length; i++) {
-      if (data[i][idxTitulo] === libro) {
-        rowIndex = i + 1; // 1-based para getRange, +1 por la fila de encabezado
-        idLibro = data[i][idxIdLibro];
-        cantidadTotal = Number(data[i][idxCantidadTotal]) || 0;
-        prestado = Number(data[i][idxPrestado]) || 0;
+    let bookId = null;
+    let totalCopies = 0;
+    let borrowed = 0;
+    for (let i = 1; i < rows.length; i++) {
+      if (rows[i][titleIdx] === title) {
+        rowIndex = i + 1; // 1-based for getRange, +1 for the header row
+        bookId = rows[i][bookIdIdx];
+        totalCopies = Number(rows[i][totalCopiesIdx]) || 0;
+        borrowed = Number(rows[i][borrowedIdx]) || 0;
         break;
       }
     }
@@ -174,25 +173,25 @@ function registrarPrestamo(datos) {
       return { ok: false, error: 'El libro no existe en el catálogo.' };
     }
 
-    const disponibles = cantidadTotal - prestado;
-    if (disponibles <= 0) {
+    const available = totalCopies - borrowed;
+    if (available <= 0) {
       return { ok: false, error: 'Ese libro ya no tiene stock disponible.' };
     }
 
-    const nuevoPrestado = prestado + 1;
-    libros.getRange(rowIndex, idxPrestado + 1).setValue(nuevoPrestado);
-    libros.getRange(rowIndex, idxDisponibles + 1).setValue(cantidadTotal - nuevoPrestado);
+    const newBorrowed = borrowed + 1;
+    books.getRange(rowIndex, borrowedIdx + 1).setValue(newBorrowed);
+    books.getRange(rowIndex, availableIdx + 1).setValue(totalCopies - newBorrowed);
 
-    const prestamos = ss.getSheetByName(SHEET_PRESTAMOS);
-    prestamos.appendRow([
+    const loans = ss.getSheetByName(SHEET_LOANS);
+    loans.appendRow([
       Utilities.getUuid(),
       new Date(),
-      perfil.email,
-      perfil.nombre,
-      perfil.curso,
-      idLibro,
-      libro,
-      ESTADO_SOLICITADO,
+      profile.email,
+      profile.name,
+      profile.grade,
+      bookId,
+      title,
+      STATUS_REQUESTED,
       '',
       ''
     ]);
@@ -205,125 +204,126 @@ function registrarPrestamo(datos) {
   }
 }
 
-/** Préstamos de quien está usando la app, más recientes primero. */
-function getMisPrestamos() {
+/** Loans belonging to whoever is using the app, most recent first. */
+function getMyLoans() {
   const email = Session.getActiveUser().getEmail();
-  const { headers, rows } = leerSheet_(SHEET_PRESTAMOS);
-  const idxEmail = headers.indexOf('Email');
-  const idxLibro = headers.indexOf('Libro');
-  const idxEstado = headers.indexOf('Estado');
-  const idxFecha = headers.indexOf('Fecha');
+  const { headers, rows } = readSheet_(SHEET_LOANS);
+  const emailIdx = headers.indexOf('Email');
+  const bookIdx = headers.indexOf('Libro');
+  const statusIdx = headers.indexOf('Estado');
+  const dateIdx = headers.indexOf('Fecha');
 
   return rows
-    .filter(row => row[idxEmail] === email)
+    .filter(row => row[emailIdx] === email)
     .map(row => ({
-      libro: row[idxLibro],
-      estado: row[idxEstado],
-      fecha: row[idxFecha]
+      book: row[bookIdx],
+      status: row[statusIdx],
+      date: row[dateIdx]
     }))
     .reverse();
 }
 
-function mapPrestamoRow_(row, headers) {
+function mapLoanRow_(row, headers) {
   const idx = name => headers.indexOf(name);
   return {
     id: row[idx('Id_Prestamo')],
-    libro: row[idx('Libro')],
-    nombre: row[idx('Nombre')],
-    curso: row[idx('Curso')],
-    estado: row[idx('Estado')],
-    fecha: row[idx('Fecha')]
+    book: row[idx('Libro')],
+    name: row[idx('Nombre')],
+    grade: row[idx('Curso')],
+    status: row[idx('Estado')],
+    date: row[idx('Fecha')]
   };
 }
 
-/** Solicitudes pendientes de entrega. Solo staff. */
-function getSolicitudesPendientes() {
-  requerirStaff_();
-  const { headers, rows } = leerSheet_(SHEET_PRESTAMOS);
-  const idxEstado = headers.indexOf('Estado');
+/** Loan requests still waiting on delivery. Staff only. */
+function getPendingRequests() {
+  requireStaff_();
+  const { headers, rows } = readSheet_(SHEET_LOANS);
+  const statusIdx = headers.indexOf('Estado');
   return rows
-    .filter(row => row[idxEstado] === ESTADO_SOLICITADO)
-    .map(row => mapPrestamoRow_(row, headers));
+    .filter(row => row[statusIdx] === STATUS_REQUESTED)
+    .map(row => mapLoanRow_(row, headers));
 }
 
-/** Préstamos entregados y todavía no devueltos. Solo staff. */
-function getPrestamosActivos() {
-  requerirStaff_();
-  const { headers, rows } = leerSheet_(SHEET_PRESTAMOS);
-  const idxEstado = headers.indexOf('Estado');
+/** Loans delivered and not returned yet. Staff only. */
+function getActiveLoans() {
+  requireStaff_();
+  const { headers, rows } = readSheet_(SHEET_LOANS);
+  const statusIdx = headers.indexOf('Estado');
   return rows
-    .filter(row => row[idxEstado] === ESTADO_ENTREGADO)
-    .map(row => mapPrestamoRow_(row, headers));
+    .filter(row => row[statusIdx] === STATUS_DELIVERED)
+    .map(row => mapLoanRow_(row, headers));
 }
 
-/** Fila (1-based, con offset de encabezado) de un préstamo por su Id_Prestamo. */
-function encontrarFilaPrestamo_(sheet, headers, idPrestamo) {
-  const idxId = headers.indexOf('Id_Prestamo');
+/** Row (1-based, header offset included) of a loan by its Id_Prestamo. */
+function findLoanRow_(sheet, headers, loanId) {
+  const idIdx = headers.indexOf('Id_Prestamo');
   const data = sheet.getDataRange().getValues();
   for (let i = 1; i < data.length; i++) {
-    if (data[i][idxId] === idPrestamo) {
+    if (data[i][idIdx] === loanId) {
       return i + 1;
     }
   }
   return -1;
 }
 
-/** Confirma que el libro fue entregado en mano. Solo staff. No toca stock. */
-function confirmarEntrega(idPrestamo) {
-  requerirStaff_();
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_PRESTAMOS);
+/** Confirms the book was handed over in person. Staff only. Doesn't touch stock. */
+function confirmDelivery(loanId) {
+  requireStaff_();
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_LOANS);
   const headers = sheet.getDataRange().getValues()[0];
-  const rowIndex = encontrarFilaPrestamo_(sheet, headers, idPrestamo);
+  const rowIndex = findLoanRow_(sheet, headers, loanId);
   if (rowIndex === -1) return { ok: false, error: 'Préstamo no encontrado.' };
 
-  const idxEstado = headers.indexOf('Estado');
-  const idxFechaEntrega = headers.indexOf('Fecha_Entrega');
-  sheet.getRange(rowIndex, idxEstado + 1).setValue(ESTADO_ENTREGADO);
-  sheet.getRange(rowIndex, idxFechaEntrega + 1).setValue(new Date());
+  const statusIdx = headers.indexOf('Estado');
+  const deliveredAtIdx = headers.indexOf('Fecha_Entrega');
+  sheet.getRange(rowIndex, statusIdx + 1).setValue(STATUS_DELIVERED);
+  sheet.getRange(rowIndex, deliveredAtIdx + 1).setValue(new Date());
 
   return { ok: true };
 }
 
 /**
- * Confirma la devolución física y repone el stock (único paso del ciclo que
- * devuelve stock: se descontó al Solicitar, no al Entregar). Solo staff.
+ * Confirms the physical return and restores stock (the only step in the
+ * cycle that gives stock back: it was decremented on request, not on
+ * delivery). Staff only.
  */
-function confirmarDevolucion(idPrestamo) {
-  requerirStaff_();
+function confirmReturn(loanId) {
+  requireStaff_();
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
 
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const prestamos = ss.getSheetByName(SHEET_PRESTAMOS);
-    const headersPrestamos = prestamos.getDataRange().getValues()[0];
-    const rowIndex = encontrarFilaPrestamo_(prestamos, headersPrestamos, idPrestamo);
+    const loans = ss.getSheetByName(SHEET_LOANS);
+    const loanHeaders = loans.getDataRange().getValues()[0];
+    const rowIndex = findLoanRow_(loans, loanHeaders, loanId);
     if (rowIndex === -1) return { ok: false, error: 'Préstamo no encontrado.' };
 
-    const idxEstado = headersPrestamos.indexOf('Estado');
-    const idxFechaDevolucion = headersPrestamos.indexOf('Fecha_Devolucion');
-    const idxIdLibro = headersPrestamos.indexOf('Id_Libro');
-    const idLibro = prestamos.getRange(rowIndex, idxIdLibro + 1).getValue();
+    const statusIdx = loanHeaders.indexOf('Estado');
+    const returnedAtIdx = loanHeaders.indexOf('Fecha_Devolucion');
+    const bookIdIdx = loanHeaders.indexOf('Id_Libro');
+    const bookId = loans.getRange(rowIndex, bookIdIdx + 1).getValue();
 
-    prestamos.getRange(rowIndex, idxEstado + 1).setValue(ESTADO_DEVUELTO);
-    prestamos.getRange(rowIndex, idxFechaDevolucion + 1).setValue(new Date());
+    loans.getRange(rowIndex, statusIdx + 1).setValue(STATUS_RETURNED);
+    loans.getRange(rowIndex, returnedAtIdx + 1).setValue(new Date());
 
-    const libros = ss.getSheetByName(SHEET_LIBROS);
-    const dataLibros = libros.getDataRange().getValues();
-    const headersLibros = dataLibros[0];
-    const idxIdLibroLibros = headersLibros.indexOf('Id_Libro');
-    const idxCantidadTotal = headersLibros.indexOf('Cantidad_Total');
-    const idxDisponibles = headersLibros.indexOf('Disponibles');
-    const idxPrestado = headersLibros.indexOf('Prestado');
+    const books = ss.getSheetByName(SHEET_BOOKS);
+    const bookRows = books.getDataRange().getValues();
+    const bookHeaders = bookRows[0];
+    const booksBookIdIdx = bookHeaders.indexOf('Id_Libro');
+    const totalCopiesIdx = bookHeaders.indexOf('Cantidad_Total');
+    const availableIdx = bookHeaders.indexOf('Disponibles');
+    const borrowedIdx = bookHeaders.indexOf('Prestado');
 
-    for (let i = 1; i < dataLibros.length; i++) {
-      if (dataLibros[i][idxIdLibroLibros] === idLibro) {
-        const libroRow = i + 1;
-        const cantidadTotal = Number(dataLibros[i][idxCantidadTotal]) || 0;
-        const prestado = Number(dataLibros[i][idxPrestado]) || 0;
-        const nuevoPrestado = Math.max(0, prestado - 1);
-        libros.getRange(libroRow, idxPrestado + 1).setValue(nuevoPrestado);
-        libros.getRange(libroRow, idxDisponibles + 1).setValue(cantidadTotal - nuevoPrestado);
+    for (let i = 1; i < bookRows.length; i++) {
+      if (bookRows[i][booksBookIdIdx] === bookId) {
+        const bookRow = i + 1;
+        const totalCopies = Number(bookRows[i][totalCopiesIdx]) || 0;
+        const borrowed = Number(bookRows[i][borrowedIdx]) || 0;
+        const newBorrowed = Math.max(0, borrowed - 1);
+        books.getRange(bookRow, borrowedIdx + 1).setValue(newBorrowed);
+        books.getRange(bookRow, availableIdx + 1).setValue(totalCopies - newBorrowed);
         break;
       }
     }

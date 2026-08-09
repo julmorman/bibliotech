@@ -1,13 +1,13 @@
 <script>
-  function escapeHtml(valor) {
-    return String(valor == null ? '' : valor).replace(/[&<>"']/g, function (c) {
+  function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
 
-  function formatearFecha(fecha) {
-    if (!fecha) return '';
-    const d = new Date(fecha);
+  function formatDate(date) {
+    if (!date) return '';
+    const d = new Date(date);
     return isNaN(d) ? '' : d.toLocaleDateString('es-AR');
   }
 
@@ -20,33 +20,33 @@
     });
   });
 
-  let perfilActual = null;
+  let currentProfile = null;
 
-  function iniciar() {
+  function init() {
     google.script.run
-      .withSuccessHandler(onPerfil)
-      .withFailureHandler(onErrorInicial)
-      .obtenerPerfilActual();
+      .withSuccessHandler(onProfile)
+      .withFailureHandler(onInitError)
+      .getCurrentProfile();
   }
 
-  function onErrorInicial(err) {
+  function onInitError(err) {
     document.body.innerHTML = '<p class="msg error">Error inesperado: ' + escapeHtml(err.message) + '</p>';
   }
 
-  function onPerfil(perfil) {
-    if (!perfil) {
+  function onProfile(profile) {
+    if (!profile) {
       document.getElementById('perfil-gate').hidden = false;
       return;
     }
-    perfilActual = perfil;
-    mostrarApp();
+    currentProfile = profile;
+    showApp();
   }
 
   document.getElementById('form-perfil').addEventListener('submit', function (e) {
     e.preventDefault();
-    const datos = {
-      nombre: document.getElementById('perfil-nombre').value,
-      curso: document.getElementById('perfil-curso').value
+    const data = {
+      name: document.getElementById('perfil-nombre').value,
+      grade: document.getElementById('perfil-curso').value
     };
     const msg = document.getElementById('perfil-msg');
     msg.className = 'msg';
@@ -55,9 +55,9 @@
     google.script.run
       .withSuccessHandler(function (res) {
         if (res.ok) {
-          perfilActual = res.perfil;
+          currentProfile = res.profile;
           document.getElementById('perfil-gate').hidden = true;
-          mostrarApp();
+          showApp();
         } else {
           msg.textContent = '❌ ' + res.error;
           msg.className = 'msg error';
@@ -67,109 +67,109 @@
         msg.textContent = '❌ Error inesperado: ' + err.message;
         msg.className = 'msg error';
       })
-      .crearPerfil(datos);
+      .createProfile(data);
   });
 
-  function mostrarApp() {
+  function showApp() {
     document.getElementById('app').hidden = false;
-    if (perfilActual.rol === 'staff') {
+    if (currentProfile.role === 'staff') {
       document.getElementById('tab-btn-staff').hidden = false;
-      cargarStaff();
+      loadStaff();
     }
-    cargarCatalogo();
-    cargarMisPrestamos();
+    loadCatalog();
+    loadMyLoans();
   }
 
-  function cargarCatalogo() {
-    google.script.run.withSuccessHandler(renderCatalogo).getCatalogo();
+  function loadCatalog() {
+    google.script.run.withSuccessHandler(renderCatalog).getCatalog();
   }
 
-  function renderCatalogo(libros) {
+  function renderCatalog(books) {
     const tbody = document.querySelector('#tabla-libros tbody');
     const select = document.getElementById('libro');
 
-    tbody.innerHTML = libros.length
-      ? libros.map(l => `<tr><td>${escapeHtml(l.titulo)}</td><td>${escapeHtml(l.autor)}</td><td>${l.disponibles}</td></tr>`).join('')
+    tbody.innerHTML = books.length
+      ? books.map(b => `<tr><td>${escapeHtml(b.title)}</td><td>${escapeHtml(b.author)}</td><td>${b.available}</td></tr>`).join('')
       : '<tr><td colspan="3">No hay libros disponibles.</td></tr>';
 
     select.innerHTML = '<option value="" disabled selected>Elegí un libro...</option>' +
-      libros.map(l => `<option value="${escapeHtml(l.titulo)}">${escapeHtml(l.titulo)}</option>`).join('');
+      books.map(b => `<option value="${escapeHtml(b.title)}">${escapeHtml(b.title)}</option>`).join('');
   }
 
   document.getElementById('form-prestamo').addEventListener('submit', function (e) {
     e.preventDefault();
-    const boton = document.getElementById('btn-confirmar');
+    const button = document.getElementById('btn-confirmar');
     const msg = document.getElementById('msg');
-    const datos = { libro: document.getElementById('libro').value };
+    const data = { book: document.getElementById('libro').value };
 
-    boton.disabled = true;
+    button.disabled = true;
     msg.className = 'msg';
     msg.textContent = '';
 
     google.script.run
       .withSuccessHandler(function (res) {
-        boton.disabled = false;
+        button.disabled = false;
         if (res.ok) {
           msg.textContent = '✅ ¡Listo! Tu solicitud fue registrada.';
           msg.className = 'msg ok';
           document.getElementById('form-prestamo').reset();
-          cargarCatalogo();
-          cargarMisPrestamos();
+          loadCatalog();
+          loadMyLoans();
         } else {
           msg.textContent = '❌ ' + res.error;
           msg.className = 'msg error';
         }
       })
       .withFailureHandler(function (err) {
-        boton.disabled = false;
+        button.disabled = false;
         msg.textContent = '❌ Error inesperado: ' + err.message;
         msg.className = 'msg error';
       })
-      .registrarPrestamo(datos);
+      .requestLoan(data);
   });
 
-  function cargarMisPrestamos() {
-    google.script.run.withSuccessHandler(renderMisPrestamos).getMisPrestamos();
+  function loadMyLoans() {
+    google.script.run.withSuccessHandler(renderMyLoans).getMyLoans();
   }
 
-  function renderMisPrestamos(prestamos) {
+  function renderMyLoans(loans) {
     const tbody = document.querySelector('#tabla-mis-prestamos tbody');
-    tbody.innerHTML = prestamos.length
-      ? prestamos.map(p => `<tr><td>${escapeHtml(p.libro)}</td><td><span class="badge badge-${escapeHtml((p.estado || '').toLowerCase())}">${escapeHtml(p.estado)}</span></td><td>${formatearFecha(p.fecha)}</td></tr>`).join('')
+    tbody.innerHTML = loans.length
+      ? loans.map(l => `<tr><td>${escapeHtml(l.book)}</td><td><span class="badge badge-${escapeHtml((l.status || '').toLowerCase())}">${escapeHtml(l.status)}</span></td><td>${formatDate(l.date)}</td></tr>`).join('')
       : '<tr><td colspan="3">Todavía no pediste ningún préstamo.</td></tr>';
   }
 
-  function cargarStaff() {
-    google.script.run.withSuccessHandler(renderSolicitudes).getSolicitudesPendientes();
-    google.script.run.withSuccessHandler(renderActivos).getPrestamosActivos();
+  function loadStaff() {
+    google.script.run.withSuccessHandler(renderPendingRequests).getPendingRequests();
+    google.script.run.withSuccessHandler(renderActiveLoans).getActiveLoans();
   }
 
-  function renderSolicitudes(solicitudes) {
+  function renderPendingRequests(requests) {
     const tbody = document.querySelector('#tabla-solicitudes tbody');
-    tbody.innerHTML = solicitudes.length
-      ? solicitudes.map(p => `<tr><td>${escapeHtml(p.libro)}</td><td>${escapeHtml(p.nombre)}</td><td>${escapeHtml(p.curso)}</td><td><button type="button" onclick="entregar('${p.id}')">Confirmar entrega</button></td></tr>`).join('')
+    tbody.innerHTML = requests.length
+      ? requests.map(l => `<tr><td>${escapeHtml(l.book)}</td><td>${escapeHtml(l.name)}</td><td>${escapeHtml(l.grade)}</td><td><button type="button" onclick="deliver('${l.id}')">Confirmar entrega</button></td></tr>`).join('')
       : '<tr><td colspan="4">No hay solicitudes pendientes.</td></tr>';
   }
 
-  function renderActivos(activos) {
+  function renderActiveLoans(loans) {
     const tbody = document.querySelector('#tabla-activos tbody');
-    tbody.innerHTML = activos.length
-      ? activos.map(p => `<tr><td>${escapeHtml(p.libro)}</td><td>${escapeHtml(p.nombre)}</td><td>${escapeHtml(p.curso)}</td><td><button type="button" onclick="devolver('${p.id}')">Confirmar devolución</button></td></tr>`).join('')
+    tbody.innerHTML = loans.length
+      ? loans.map(l => `<tr><td>${escapeHtml(l.book)}</td><td>${escapeHtml(l.name)}</td><td>${escapeHtml(l.grade)}</td><td><button type="button" onclick="returnBook('${l.id}')">Confirmar devolución</button></td></tr>`).join('')
       : '<tr><td colspan="4">No hay préstamos entregados.</td></tr>';
   }
 
-  function entregar(id) {
-    google.script.run.withSuccessHandler(cargarStaff).confirmarEntrega(id);
+  function deliver(id) {
+    google.script.run.withSuccessHandler(loadStaff).confirmDelivery(id);
   }
 
-  function devolver(id) {
+  function returnBook(id) {
     google.script.run
       .withSuccessHandler(function () {
-        cargarStaff();
-        cargarCatalogo();
+        loadStaff();
+        loadCatalog();
       })
-      .confirmarDevolucion(id);
+      .confirmReturn(id);
   }
 
-  iniciar();
+  init();
 </script>
