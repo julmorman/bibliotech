@@ -1,171 +1,174 @@
-# Bibliotech — prototipo en Google Apps Script
+# Bibliotech — Google Apps Script prototype
 
-Reemplaza el conector `streamlit-gsheets` (que fallaba con `HTTP 400`) por un
-script **bound** a la propia Google Sheet: corre con el login de Google de
-quien accede a la app (dentro del dominio del colegio), así que no hay
-cuenta de servicio, JSON de credenciales ni `secrets.toml`, y el login sirve
-también para identificar a cada persona. El HTML lo servís vos, con control
-total del diseño.
+Replaces the `streamlit-gsheets` connector (which failed with `HTTP 400`)
+with a script **bound** to the Google Sheet itself: it runs with the Google
+login of whoever is accessing the app (within the school's domain), so
+there's no service account, no credentials JSON, no `secrets.toml` — and
+that same login doubles as identifying each person. You serve the HTML
+yourself, with full control over the design.
 
-## Archivos
+## Files
 
-- `appsscript.json` — manifiesto del proyecto (config del web app).
-- `Code.js` — lógica de servidor: perfiles y roles, catálogo, ciclo de
-  préstamo completo (`Solicitado → Entregado → Devuelto`) con acciones de
-  staff, y `LockService` para evitar que dos personas se lleven el último
-  ejemplar al mismo tiempo.
-- `Index.html` — estructura del frontend (catálogo + formulario), sin frameworks.
-- `Stylesheet.html` / `JavaScript.html` — CSS y JS del frontend, separados de
-  `Index.html` e inyectados con `include()` (patrón recomendado por Google
-  para proyectos de Apps Script — evita un único archivo HTML gigante).
+- `appsscript.json` — project manifest (web app config).
+- `Code.js` — server-side logic: profiles and roles, catalog, full loan
+  cycle (`Solicitado → Entregado → Devuelto`) with staff actions, and
+  `LockService` so two people can't grab the last copy at once.
+- `Index.html` — frontend markup (catalog + form), no frameworks.
+- `Stylesheet.html` / `JavaScript.html` — frontend CSS and JS, split out
+  of `Index.html` and injected with `include()` (Google's recommended
+  pattern for Apps Script projects — avoids one giant HTML file).
 
-## Estructura esperada de la Sheet
+## Expected Sheet structure
 
-- Pestaña **Libros**: columnas `Id_Libro | Titulo | Autor | Cantidad_Total | Disponibles | Prestado`
-  (fila 1 = encabezados). `Disponibles` se calcula como `Cantidad_Total − Prestado` —
-  el script escribe ese valor para que se vea reflejado en la sheet, pero la fuente
-  de verdad es `Prestado` (nunca se lee `Disponibles` para decidir stock).
-- Pestaña **Prestamos**: columnas `Id_Prestamo | Fecha | Email | Nombre | Curso |
-  Id_Libro | Libro | Estado | Fecha_Entrega | Fecha_Devolucion` (fila 1 =
-  encabezados). `appendRow` escribe por posición de columna, no por nombre —
-  respetar ese orden exacto. `Estado` recorre `Solicitado → Entregado →
-  Devuelto`; el stock de `Libros` se descuenta al Solicitar (no al Entregar)
-  y se repone al confirmar la Devolución — así el último ejemplar queda sin
-  stock apenas alguien lo pide, sin esperar a que pase por el mostrador.
-- Pestaña **Perfiles**: columnas `Email | Nombre | Curso | Rol | FechaAlta`
-  (fila 1 = encabezados). Se completa sola la primera vez que cada persona
-  entra a la app (formulario de alta única). `Rol` nace en `member`; para
-  dar de alta a alguien de staff se edita esa celda a mano, poniendo
-  `staff`.
+- **Libros** tab: columns `Id_Libro | Titulo | Autor | Cantidad_Total | Disponibles | Prestado`
+  (row 1 = headers). `Disponibles` is computed as `Cantidad_Total − Prestado` —
+  the script writes that value so it's visible on the sheet, but the source
+  of truth is `Prestado` (`Disponibles` is never read to decide stock).
+- **Prestamos** tab: columns `Id_Prestamo | Fecha | Email | Nombre | Curso |
+  Id_Libro | Libro | Estado | Fecha_Entrega | Fecha_Devolucion` (row 1 =
+  headers). `appendRow` writes by column position, not by name — keep that
+  exact order. `Estado` moves through `Solicitado → Entregado →
+  Devuelto`; stock on `Libros` is decremented on Request (not on Delivery)
+  and restored on confirming the Return — that way the last copy shows no
+  stock the moment someone requests it, without waiting for them to pick
+  it up at the desk.
+- **Perfiles** tab: columns `Email | Nombre | Curso | Rol | FechaAlta`
+  (row 1 = headers). Fills itself in the first time each person opens the
+  app (one-time sign-up form). `Rol` starts as `member`; to promote
+  someone to staff, edit that cell by hand to `staff`.
 
-## Acceso y login
+## Access and login
 
-`appsscript.json` tiene `webapp.access: "DOMAIN"` y `webapp.executeAs:
-"USER_ACCESSING"`: el web app exige login de Google del mismo dominio del
-colegio antes de servir la página, y el servidor corre con la identidad de
-quien está mirando la página (no con la del dueño del script). Eso es lo
-que le permite a `Session.getActiveUser().getEmail()` identificar quién pide
-cada préstamo, sin ningún código de autenticación propio.
+`appsscript.json` has `webapp.access: "DOMAIN"` and `webapp.executeAs:
+"USER_ACCESSING"`: the web app requires a Google login from the school's
+own domain before serving the page, and the server runs as whoever is
+looking at the page (not as the script's owner). That's what lets
+`Session.getActiveUser().getEmail()` identify who's requesting each loan,
+with no auth code of our own.
 
-**Para probarlo hace falta una cuenta del mismo Workspace** que el script
-(no funciona con cuentas @gmail.com sueltas) — desplegar bajo el Workspace
-real del colegio, o uno de prueba.
+**Testing this requires an account on the same Workspace** as the script
+(it doesn't work with standalone @gmail.com accounts) — deploy under the
+school's real Workspace, or a test one.
 
-## Cómo probarlo (sin tener todavía el Workspace del colegio)
+## How to test it (before you have the school's Workspace)
 
-Hay dos niveles de prueba, según qué querés validar:
+There are two levels of testing, depending on what you want to validate:
 
-**A) Iteración rápida de la lógica (catálogo, pedir préstamo, ciclo de
-estados, vista de staff)** — no requiere Workspace, sirve con tu cuenta
-personal:
+**A) Fast iteration on the logic (catalog, requesting a loan, status
+cycle, staff view)** — no Workspace needed, works with your personal
+account:
 
-1. `npx @google/clasp login` (una vez — abre el navegador, autoriza tu
-   cuenta de Google). No hace falta instalarlo global, `npx` alcanza.
-2. Creá una Google Sheet nueva y armá 3 pestañas con estos headers exactos
-   en la fila 1 (mismo orden — `appendRow` escribe por posición):
+1. `npx @google/clasp login` (once — opens the browser, authorizes your
+   Google account). No need to install it globally, `npx` is enough.
+2. Create a new Google Sheet and set up 3 tabs with these exact headers
+   on row 1 (same order — `appendRow` writes by position):
    - `Libros`: `Id_Libro | Titulo | Autor | Cantidad_Total | Disponibles | Prestado`
    - `Prestamos`: `Id_Prestamo | Fecha | Email | Nombre | Curso | Id_Libro | Libro | Estado | Fecha_Entrega | Fecha_Devolucion`
    - `Perfiles`: `Email | Nombre | Curso | Rol | FechaAlta`
-   Cargá 1-2 filas de prueba en `Libros` (con `Cantidad_Total` puesto y
-   `Prestado` en `0`) para tener algo en el catálogo.
-3. Cambiá `webapp.access` en `appsscript.json` de `"DOMAIN"` a `"MYSELF"`
-   (solo vos vas a poder abrirlo — no hace falta dominio para eso). Es un
-   cambio temporal, solo para probar; no lo commitees así.
-4. Desde `apps-script/`, vinculá el proyecto a esa Sheet (el ID es el que
-   aparece en su URL):
+   Add 1-2 test rows in `Libros` (with `Cantidad_Total` set and `Prestado`
+   at `0`) so there's something in the catalog.
+3. Temporarily change `webapp.access` in `appsscript.json` from
+   `"DOMAIN"` to `"MYSELF"` (only you'll be able to open it — no domain
+   needed for that). This is a throwaway change for testing; don't commit
+   it as-is.
+4. From `apps-script/`, link the project to that Sheet (the ID is the one
+   in its URL):
    ```bash
    cd apps-script
-   npx @google/clasp create --type sheets --title "Bibliotech test" --parentId <ID_DE_LA_SPREADSHEET>
+   npx @google/clasp create --type sheets --title "Bibliotech test" --parentId <SPREADSHEET_ID>
    ```
-5. Subí el código y desplegalo:
+5. Push the code and deploy it:
    ```bash
    npx @google/clasp push
    npx @google/clasp deploy
    ```
-   `clasp deploy` te devuelve una URL — esa es tu "servidor local".
-6. Abrí esa URL: vas a entrar siempre como vos mismo/a. Completá el perfil
-   para ver la vista de `member`. Para ver la vista de `staff`, andá a la
-   pestaña `Perfiles` de la Sheet, cambiá a mano tu propia fila a
-   `Rol: staff`, y recargá la página.
-7. Cuando cambies `Code.js`/`Index.html`/etc., repetí `clasp push` y
-   recargá — no hace falta un `clasp deploy` nuevo para ver los cambios si
-   abrís la URL de **Implementación de prueba** (`clasp open` → Implementar
-   → Implementaciones de prueba), que sirve siempre la última versión
-   pusheada sin publicar una versión nueva cada vez.
-8. Esto **no** prueba el gate de dominio en sí (`access: DOMAIN`) ni que
-   dos cuentas distintas se vean como dos perfiles distintos — para eso
-   hace falta B. Antes de commitear, volvé `access` a `"DOMAIN"`.
+   `clasp deploy` gives you back a URL — that's your "local server".
+6. Open that URL: you'll always be signed in as yourself. Complete the
+   profile to see the `member` view. To see the `staff` view, go to the
+   `Perfiles` tab on the Sheet, change your own row to `Rol: staff` by
+   hand, and reload the page.
+7. When you change `Code.js`/`Index.html`/etc., repeat `clasp push` and
+   reload — no need for a fresh `clasp deploy` to see the changes if you
+   open the **test deployment** URL (`clasp open` → Deploy → Test
+   deployments), which always serves the latest pushed version without
+   publishing a new version each time.
+8. This does **not** test the domain gate itself (`access: DOMAIN`) or
+   whether two different accounts show up as two different profiles —
+   that needs B. Switch `access` back to `"DOMAIN"` before committing.
 
-**B) Validación completa antes de llevarlo a una escuela real** — sí
-requiere un dominio Workspace, pero no hace falta que sea el del colegio
-todavía: [Google Workspace tiene un trial gratis de 14 días](https://workspace.google.com/)
-que alcanza para esto. Con esa cuenta de administrador creás 2 usuarios de
-prueba (uno para hacer de `member`, otro para promover a `staff`), volvés
-`webapp.access` a `"DOMAIN"`, desplegás, y probás el flujo end a end de la
-sección "Verificación" del plan (login bloqueado para cuentas de afuera,
-alta de perfil, pedido, confirmación de entrega/devolución con la cuenta
-staff).
+**B) Full validation before taking it to a real school** — this does need
+a Workspace domain, but it doesn't have to be the school's yet:
+[Google Workspace has a free 14-day trial](https://workspace.google.com/)
+that's enough for this. With that admin account, create 2 test users (one
+to act as `member`, another to promote to `staff`), switch
+`webapp.access` back to `"DOMAIN"`, deploy, and run through the end-to-end
+flow from the plan's "Verification" section (login blocked for outside
+accounts, profile sign-up, request, delivery/return confirmation with the
+staff account).
 
-## Cómo versionarlo en git: `clasp`
+## Versioning it in git: `clasp`
 
-Apps Script normalmente vive solo en el editor web de Google (script.google.com),
-sin git. **`clasp`** (`@google/clasp`, CLI oficial de Google) resuelve eso:
-mantiene los archivos como `.js`/`.html`/`.json` locales — como cualquier
-proyecto — y los sincroniza contra el proyecto de Apps Script en la nube.
+Apps Script normally lives only in Google's web editor
+(script.google.com), with no git. **`clasp`** (`@google/clasp`, Google's
+official CLI) fixes that: it keeps the files as local `.js`/`.html`/`.json`
+— like any other project — and syncs them against the Apps Script project
+in the cloud.
 
-### Setup (una vez, vos como desarrollador)
+### Setup (once, as the developer)
 
 ```bash
 npm install -g @google/clasp
-clasp login                       # abre el navegador, autoriza tu cuenta de Google
+clasp login                       # opens the browser, authorizes your Google account
 ```
 
-### Vincular esta carpeta a un proyecto de Apps Script
+### Linking this folder to an Apps Script project
 
-Dos caminos:
+Two paths:
 
-**A) Crear el proyecto bound desde acá** (requiere el ID de la Spreadsheet de prueba):
+**A) Create the bound project from here** (needs the test Spreadsheet's ID):
 ```bash
 cd apps-script
-clasp create --type sheets --title "Bibliotech" --parentId <ID_DE_LA_SPREADSHEET>
+clasp create --type sheets --title "Bibliotech" --parentId <SPREADSHEET_ID>
 ```
 
-**B) Vincular un proyecto que ya creaste a mano** (Extensiones → Apps Script en la Sheet):
+**B) Link a project you already created by hand** (Extensions → Apps Script on the Sheet):
 ```bash
 cd apps-script
-clasp clone <SCRIPT_ID>          # el Script ID está en Configuración del proyecto
+clasp clone <SCRIPT_ID>          # the Script ID is in the project's settings
 ```
 
-Ambos comandos generan `.clasp.json` (contiene el `scriptId`, es específico de
-cada Sheet/despliegue — **no** se sube a git, ver `.gitignore`).
+Both commands generate `.clasp.json` (holds the `scriptId`, specific to
+each Sheet/deployment — **not** pushed to git, see `.gitignore`).
 
-### Flujo de trabajo diario
+### Day-to-day workflow
 
 ```bash
-clasp push      # sube Code.js / Index.html / appsscript.json a la nube
-clasp open      # abre el editor web para probar
-clasp deploy    # publica una versión del web app (genera la URL pública)
+clasp push      # uploads Code.js / Index.html / appsscript.json to the cloud
+clasp open      # opens the web editor to test
+clasp deploy    # publishes a version of the web app (generates the public URL)
 ```
 
-El código fuente de verdad queda en este repo; `clasp push` es solo el paso
-de "subir la última versión", igual que un deploy.
+The source of truth stays in this repo; `clasp push` is just the "upload
+the latest version" step, same as a deploy.
 
-## Cómo lo usaría una escuela sin conocimiento técnico
+## How a school with no technical knowledge would use this
 
-Ahí **no** hace falta clasp — es una herramienta para vos como desarrollador,
-no para quien administra la biblioteca en cada escuela. El flujo pensado es:
+They **don't** need clasp for that — it's a tool for you as the
+developer, not for whoever runs the library at each school. The intended
+flow is:
 
-1. Vos armás una Google Sheet "plantilla" con las pestañas `Libros`,
-   `Prestamos` y `Perfiles` (headers ya cargados), con el script ya pegado
-   adentro (vía `Extensiones > Apps Script`) y ya desplegado como web app.
-2. Cada escuela hace **Archivo → Hacer una copia** de esa Sheet plantilla. La
-   copia incluye el script.
-3. Alguien de la escuela entra a `Extensiones > Apps Script > Implementar >
-   Nueva implementación` una vez, y comparte esa URL con el resto.
-4. Esa misma persona entra a la URL con su cuenta del colegio (queda de alta
-   como `member`), y después edita a mano su propia fila en `Perfiles` para
-   poner `Rol: staff` — es el único paso manual en Sheets que hace falta
-   para arrancar; de ahí en más, promover a más staff se hace igual.
+1. You set up a "template" Google Sheet with the `Libros`, `Prestamos`
+   and `Perfiles` tabs (headers already in place), with the script already
+   pasted in (via `Extensions > Apps Script`) and already deployed as a
+   web app.
+2. Each school does **File → Make a copy** of that template Sheet. The
+   copy includes the script.
+3. Someone at the school goes to `Extensions > Apps Script > Deploy >
+   New deployment` once, and shares that URL with everyone else.
+4. That same person opens the URL with their school account (signs up as
+   `member`), then edits their own row on `Perfiles` by hand to set
+   `Rol: staff` — it's the only manual step on the Sheet needed to get
+   started; promoting more staff after that works the same way.
 
-Sin GitHub, sin terminal, sin credenciales — clonar una Sheet en vez de
-clonar un repo.
+No GitHub, no terminal, no credentials — cloning a Sheet instead of
+cloning a repo.

@@ -1,35 +1,34 @@
 # Bibliotech
 
-Sistema de catálogo y préstamos para bibliotecas escolares, pensado para
-escuelas sin soporte técnico dedicado (muchas veces, sin siquiera
-bibliotecaria). Corre como un Google Apps Script *bound* a una Google Sheets
-que actúa de base de datos — sin servidores propios, sin credenciales que
-gestionar, sin hosting que mantener.
+Catalog and loan system for school libraries, built for schools with no
+dedicated tech support (often, not even a librarian). Runs as a Google
+Apps Script *bound* to a Google Sheet that acts as the database — no
+servers of your own, no credentials to manage, no hosting to maintain.
 
-## Cómo funciona
+## How it works
 
-- La "base de datos" es una Google Sheet con tres pestañas: `Libros`
-  (catálogo + stock), `Prestamos` (ciclo de vida de cada préstamo) y
-  `Perfiles` (una fila por persona, con su rol).
-- El código (`apps-script/`) corre bound a esa Sheet, con el login de Google
-  de quien accede — restringido al dominio del colegio — no requiere cuentas
-  de servicio ni claves de API, y ese mismo login identifica a cada persona.
-- Sirve una página web propia (HTML/CSS/JS): los alumnos ven el catálogo y
-  piden préstamos (el stock se valida y descuenta en el momento, protegido
-  contra que dos personas se lleven el mismo último ejemplar a la vez); el
-  ciclo completo es `Solicitado → Entregado → Devuelto`, con quien tenga rol
-  `staff` confirmando la entrega y la devolución en persona desde su propia
-  pestaña dentro de la misma app.
+- The "database" is a Google Sheet with three tabs: `Libros`
+  (catalog + stock), `Prestamos` (each loan's lifecycle), and
+  `Perfiles` (one row per person, with their role).
+- The code (`apps-script/`) runs bound to that Sheet, with the Google
+  login of whoever is accessing it — restricted to the school's domain —
+  no service accounts or API keys needed, and that same login identifies
+  each person.
+- It serves its own web page (HTML/CSS/JS): students see the catalog and
+  request loans (stock is validated and decremented on the spot,
+  protected against two people grabbing the same last copy at once); the
+  full cycle is `Solicitado → Entregado → Devuelto` (Requested →
+  Delivered → Returned), with whoever has the `staff` role confirming
+  delivery and return in person from their own tab within the same app.
 
-## Instalación (para quien administra la biblioteca de una escuela)
+## Installation (for whoever runs a school's library)
 
-Ver [`apps-script/README.md`](apps-script/README.md) — no requiere terminal
-ni conocimientos de programación: alcanza con copiar una Google Sheet
-plantilla y un par de clicks en "Implementar" dentro del editor de Apps
-Script.
+See [`apps-script/README.md`](apps-script/README.md) — no terminal or
+programming knowledge required: it's just copying a template Google
+Sheet and a couple of clicks on "Deploy" inside the Apps Script editor.
 
-## Desarrollo
+## Development
 
-Si vas a tocar el código fuente, `apps-script/README.md` también documenta
-cómo versionarlo con `clasp` (la CLI oficial de Google para Apps Script)
-para poder trabajar con git como con cualquier otro proyecto.
+If you're touching the source code, `apps-script/README.md` also
+documents how to version it with `clasp` (Google's official CLI for Apps
+Script) so you can work with git like any other project.
